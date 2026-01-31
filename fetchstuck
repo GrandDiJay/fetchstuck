@@ -1,0 +1,414 @@
+#!/usr/bin/env bash
+
+# fetchstuck v1.0.1
+# A Homestuck-themed system fetch tool.
+# License: MIT
+
+VERSION="1.0.1"
+
+case "$1" in
+    -h|--help)
+        echo "Usage: fetchstuck [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  -h, --help      Show this help message"
+        echo "  -v, --version   Show version information"
+        echo ""
+        echo "Configuration:"
+        echo "  Config file: \${XDG_CONFIG_HOME:-~/.config}/fetchstuck/config"
+        exit 0
+        ;;
+    -v|--version)
+        echo "fetchstuck $VERSION"
+        exit 0
+        ;;
+esac
+
+FS_ASCII_ART="sburb"
+FS_COLOR_THEME="default"
+FS_CUSTOM_TITLE=""
+FS_SHOW_GPU="on"
+FS_ALIGN_MODE="left"
+FS_IMAGE=""
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fetchstuck"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+if [[ ! -d "$CONFIG_DIR" ]]; then
+    mkdir -p "$CONFIG_DIR" 2>/dev/null
+fi
+
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
+
+if command -v tput >/dev/null 2>&1; then
+    bold=$(tput bold)
+    reset=$(tput sgr0)
+
+    cursor_up() { tput cuu "$1"; }
+    cursor_right() { tput cuf "$1"; }
+
+    black=$(tput setaf 0)
+    red=$(tput setaf 1)
+    green=$(tput setaf 2)
+    yellow=$(tput setaf 3)
+    blue=$(tput setaf 4)
+    magenta=$(tput setaf 5)
+    cyan=$(tput setaf 6)
+    white=$(tput setaf 7)
+    grey=$(tput setaf 8)
+else
+    bold="\e[1m"
+    reset="\e[0m"
+
+    cursor_up() { printf "\033[%dA" "$1"; }
+    cursor_right() { printf "\033[%dC" "$1"; }
+
+    black="\e[30m"
+    red="\e[31m"
+    green="\e[32m"
+    yellow="\e[33m"
+    blue="\e[34m"
+    magenta="\e[35m"
+    cyan="\e[36m"
+    white="\e[37m"
+    grey="\e[90m"
+fi
+
+case "$FS_COLOR_THEME" in
+    "scratch")
+        c_title="$white$bold"
+        c_label="$green"
+        c_value="$white"
+        c_ascii="$green"
+        ;;
+    "grimdark")
+        c_title="$grey$bold"
+        c_label="$black$bold"
+        c_value="$grey"
+        c_ascii="$black$bold"
+        ;;
+    *)
+        c_title="$green$bold"
+        c_label="$red$bold"
+        c_value="$reset"
+        c_ascii="$green"
+        ;;
+esac
+
+detect_os() {
+    if [[ -f /etc/os-release ]]; then
+        (source /etc/os-release && echo "${PRETTY_NAME:-$NAME}")
+    elif command -v lsb_release >/dev/null 2>&1; then
+        lsb_release -d | cut -f2
+    else
+        uname -s
+    fi
+}
+
+detect_kernel() {
+    uname -r
+}
+
+detect_uptime() {
+    if [[ -f /proc/uptime ]]; then
+        local uptime_seconds=$(awk '{print int($1)}' /proc/uptime)
+        local d=$((uptime_seconds / 86400))
+        local h=$(( (uptime_seconds % 86400) / 3600 ))
+        local m=$(( (uptime_seconds % 3600) / 60 ))
+
+        local out=""
+        [[ $d -gt 0 ]] && out="${d}d "
+        [[ $h -gt 0 ]] && out="${out}${h}h "
+        out="${out}${m}m"
+        echo "$out"
+    else
+        echo "Unknown"
+    fi
+}
+
+detect_shell() {
+    local shell_path="${SHELL##*/}"
+    echo "${shell_path:-bash}"
+}
+
+detect_cpu() {
+    if [[ -f /proc/cpuinfo ]]; then
+        grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//' | sed 's/  */ /g'
+    else
+        echo "Unknown Processor"
+    fi
+}
+
+detect_gpu() {
+    if [[ "$FS_SHOW_GPU" == "off" ]]; then
+        return
+    fi
+    if command -v lspci >/dev/null 2>&1; then
+        lspci -mm | grep -i 'vga\|3d\|display' | cut -d'"' -f4 | head -n 1
+    else
+        echo "Void (Not Detected)"
+    fi
+}
+
+detect_memory() {
+    if [[ -f /proc/meminfo ]]; then
+        local total=$(grep "MemTotal" /proc/meminfo | awk '{print $2}')
+        local avail=$(grep "MemAvailable" /proc/meminfo | awk '{print $2}')
+        if [[ -z "$avail" ]]; then
+            local free=$(grep "MemFree" /proc/meminfo | awk '{print $2}')
+            local buffers=$(grep "Buffers" /proc/meminfo | awk '{print $2}')
+            local cached=$(grep "^Cached" /proc/meminfo | awk '{print $2}')
+            avail=$((free + buffers + cached))
+        fi
+        local used=$((total - avail))
+        echo "$((used / 1024))MiB / $((total / 1024))MiB"
+    else
+        echo "Unknown"
+    fi
+}
+
+detect_disk() {
+    df -h / 2>/dev/null | awk 'NR==2 {print $3 " / " $2 " (" $5 ")"}'
+}
+
+detect_resolution() {
+    if [[ -f /sys/class/graphics/fb0/virtual_size ]]; then
+        tr ',' 'x' < /sys/class/graphics/fb0/virtual_size
+    elif command -v xrandr >/dev/null 2>&1 && [[ -n "$DISPLAY" ]]; then
+         xrandr --current | grep '*' | uniq | awk '{print $1}' | head -n 1
+    else
+        echo "Hidden"
+    fi
+}
+
+detect_packages() {
+    local count="0"
+    if command -v pacman >/dev/null 2>&1; then
+        count=$(pacman -Qq | wc -l)
+    elif command -v dpkg >/dev/null 2>&1; then
+        count=$(dpkg-query -f '${binary:Package}\n' -W | wc -l)
+    elif command -v rpm >/dev/null 2>&1; then
+        count=$(rpm -qa | wc -l)
+    elif command -v xbps-query >/dev/null 2>&1; then
+        count=$(xbps-query -l | wc -l)
+    elif command -v apk >/dev/null 2>&1; then
+        count=$(apk info | wc -l)
+    elif command -v dnf >/dev/null 2>&1; then
+        count=$(dnf list installed | wc -l)
+    fi
+    echo "$count"
+}
+
+detect_wm() {
+    if [[ -n "$XDG_CURRENT_DESKTOP" ]]; then
+        echo "$XDG_CURRENT_DESKTOP"
+    elif [[ -n "$DESKTOP_SESSION" ]]; then
+        echo "$DESKTOP_SESSION"
+    elif [[ -n "$WM" ]]; then
+        echo "$WM"
+    else
+        echo "Void"
+    fi
+}
+
+derive_aspect() {
+    local os_name_lower=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    if [[ "$os_name_lower" == *"arch"* ]]; then echo "Time"
+    elif [[ "$os_name_lower" == *"debian"* ]]; then echo "Space"
+    elif [[ "$os_name_lower" == *"ubuntu"* ]]; then echo "Breath"
+    elif [[ "$os_name_lower" == *"fedora"* ]]; then echo "Light"
+    elif [[ "$os_name_lower" == *"gentoo"* || "$os_name_lower" == *"void"* ]]; then echo "Void"
+    elif [[ "$os_name_lower" == *"mint"* ]]; then echo "Life"
+    elif [[ "$os_name_lower" == *"kali"* ]]; then echo "Doom"
+    elif [[ "$os_name_lower" == *"nixos"* ]]; then echo "Mind"
+    elif [[ "$os_name_lower" == *"slackware"* ]]; then echo "Rage"
+    elif [[ "$os_name_lower" == *"opensuse"* ]]; then echo "Hope"
+    elif [[ "$os_name_lower" == *"centos"* || "$os_name_lower" == *"rhel"* ]]; then echo "Blood"
+    else echo "Heart"; fi
+}
+
+derive_class() {
+    local shell_name="$1"
+    case "$shell_name" in
+        "bash") echo "Heir" ;;
+        "zsh") echo "Seer" ;;
+        "fish") echo "Page" ;;
+        "sh"|"dash") echo "Knight" ;;
+        "ksh") echo "Maid" ;;
+        "csh"|"tcsh") echo "Mage" ;;
+        *) echo "Rogue" ;;
+    esac
+}
+
+derive_title() {
+    local os_name="$1"
+    local shell_name="$2"
+    local os_lower=$(echo "$os_name" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$os_lower" == *"fedora"* ]]; then
+        echo "Rogue of Void"
+        return
+    fi
+
+    if [[ $(id -u) -eq 0 ]]; then
+        echo "Lord of $(derive_aspect "$os_name")"
+    else
+        echo "$(derive_class "$shell_name") of $(derive_aspect "$os_name")"
+    fi
+}
+
+get_ascii() {
+    case "$FS_ASCII_ART" in
+        "sburb")
+# Fixed heredoc: EOF must be at the start of the line
+cat << "EOF"
+
+
+       ........    ===
+       -=======:=========:
+       -=====================.
+       -=========================
+    -===============================:
+ ===================--------------::::::
+                     ===============
+    ==============-  ===============
+    ==============-  ===============
+    ==============-  ===============
+    ==============-         .=======
+    ==============- =======. =======
+    ==============- =======. =======
+    ==============- =======. =======
+                    :::::::.
+    ==============- :==============
+    ==============- :==============
+    ==============- :==============
+    ==============- :==============
+    ==============- :==============
+    ==============- :==============
+    ==============- :==============
+    ==============- .==============
+    ==============- .==============
+
+EOF
+        ;;
+        *) echo "" ;;
+    esac
+}
+
+display_image() {
+    local img="$1"
+    local width="$2"
+
+    if command -v kitten >/dev/null 2>&1 && [[ "$TERM" == "xterm-kitty" ]]; then
+        kitten icat --align left --place "${width}x${width}@0x0" "$img" 2>/dev/null
+    elif command -v chafa >/dev/null 2>&1; then
+        chafa --size="${width}x${width}" "$img" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+sys_os=$(detect_os)
+sys_kernel=$(detect_kernel)
+sys_uptime=$(detect_uptime)
+sys_shell=$(detect_shell)
+sys_cpu=$(detect_cpu)
+sys_gpu=$(detect_gpu)
+sys_mem=$(detect_memory)
+sys_disk=$(detect_disk)
+sys_res=$(detect_resolution)
+sys_pkgs=$(detect_packages)
+sys_wm=$(detect_wm)
+sys_user="${USER:-$(whoami)}"
+sys_host="${HOSTNAME:-$(hostname)}"
+sys_term="${TERM}"
+
+hs_aspect=$(derive_aspect "$sys_os")
+hs_class=$(derive_class "$sys_shell")
+hs_title=$(derive_title "$sys_os" "$sys_shell")
+
+if [[ -n "$FS_CUSTOM_TITLE" ]]; then
+    header_text="$FS_CUSTOM_TITLE"
+else
+    header_text="${sys_user}@${sys_host} [${hs_title}]"
+fi
+header_underline=$(printf '%*s' "${#header_text}" '' | tr ' ' '-')
+
+info_output=""
+add_line() {
+    local label="$1"
+    local value="$2"
+    [[ -z "$value" ]] && return
+    info_output="${info_output}${c_label}${label}:${reset} ${c_value}${value}${reset}\n"
+}
+
+info_output="${c_title}${header_text}${reset}\n"
+info_output="${info_output}${c_title}${header_underline}${reset}\n"
+
+add_line "Player"            "$sys_user"
+add_line "Session"           "$sys_os"
+add_line "Timeline"          "$sys_kernel"
+add_line "Medium"            "$sys_wm"
+add_line "Session Age"       "$sys_uptime"
+add_line "Strife Specibus"   "$sys_shell"
+add_line "Captchalogue"      "$sys_pkgs"
+add_line "Think Pan"         "$sys_cpu"
+if [[ "$FS_SHOW_GPU" != "off" ]]; then
+    add_line "Alchemy Engine"    "$sys_gpu"
+fi
+add_line "Grist Cache"       "$sys_mem"
+add_line "Sylladex Capacity" "$sys_disk"
+[[ "$sys_res" != "Hidden" ]] && add_line "Viewport" "$sys_res"
+add_line "Terminal"          "$sys_term"
+
+use_image=0
+image_padding_width=0
+
+if [[ -n "$FS_IMAGE" && -f "$FS_IMAGE" ]]; then
+    if display_image "$FS_IMAGE" 35; then
+        use_image=1
+        image_padding_width=38
+
+        info_line_count=$(echo -e "$info_output" | wc -l)
+
+        cursor_up "$info_line_count"
+    else
+        use_image=0
+    fi
+fi
+
+IFS=$'\n' read -d '' -r -a info_lines <<< "$(echo -e "$info_output")"
+
+if [[ "$use_image" -eq 1 ]]; then
+    for line in "${info_lines[@]}"; do
+        cursor_right "$image_padding_width"
+        echo -e "$line"
+    done
+    echo ""
+else
+    IFS=$'\n' read -d '' -r -a ascii_lines <<< "$(get_ascii)"
+
+    max_h=${#ascii_lines[@]}
+    [[ ${#info_lines[@]} -gt $max_h ]] && max_h=${#info_lines[@]}
+
+    max_ascii_w=0
+    for line in "${ascii_lines[@]}"; do
+        [[ ${#line} -gt $max_ascii_w ]] && max_ascii_w=${#line}
+    done
+    padding="    "
+
+    for ((i=0; i<max_h; i++)); do
+        a_line="${ascii_lines[$i]}"
+        i_line="${info_lines[$i]}"
+
+        if [[ "$FS_ASCII_ART" == "off" ]]; then
+            echo -e "$i_line"
+        else
+            printf "${c_ascii}%-${max_ascii_w}s${reset}%s" "$a_line" "$padding"
+            echo -e "$i_line"
+        fi
+    done
+    echo ""
+fi
