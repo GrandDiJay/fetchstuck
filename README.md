@@ -6,8 +6,6 @@ A Homestuck-themed system fetch tool written in Bash. It re-contextualizes stand
 
 Thematic Mapping: Automatically determines your "Class" (based on your Shell) and "Aspect" (based on your Distro).
 
-Custom ASCII: Includes custom condensed "Sburb" house ASCII art.
-
 Image Support: Supports displaying images using kitty (icat) or chafa fallback.
 
 Lightweight: Written in pure Bash with minimal dependencies.
@@ -15,30 +13,32 @@ Lightweight: Written in pure Bash with minimal dependencies.
 # Installation
 
 Download the script:
-
-git clone [git@github.com:GrandDiJay/fetchstuck.git ](https://github.com/GrandDiJay/fetchstuck.git)
+```
+git clone https://github.com/GrandDiJay/fetchstuck.git
+```
+```
 cd fetchstuck
-
+```
 
 
 # Make the script executable:
-
+```
 chmod +x fetchstuck
-
+```
 
 
 (Optional) Move it to your path to run it from anywhere:
-
+```
 sudo mv fetchstuck /usr/local/bin/
-
+```
 
 
 # Usage
 
 Simply run the script:
-
+```
 ./fetchstuck
-
+```
 
 
 # Options
