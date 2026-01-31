@@ -52,13 +52,13 @@ Simply run the script:
 The script looks for a config file at ~/.config/fetchstuck/config. If it doesn't exist, default values are used.
 
 # Example Configuration:
-
+```
 FS_ASCII_ART="sburb"
 FS_COLOR_THEME="default"   # Options: default, scratch, grimdark
 FS_CUSTOM_TITLE=""         # Set a custom title string
 FS_SHOW_GPU="on"           # Toggle GPU detection
 FS_IMAGE="/path/to/img.png" # Path to an image to use instead of ASCII
-
+```
 
 # Dependencies
 
